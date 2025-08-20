@@ -1,89 +1,160 @@
-const upload = document.getElementById("upload");
-const canvas = document.getElementById("canvas");
-const ctx = canvas.getContext("2d");
-const zoomInput = document.getElementById("zoom");
-const download = document.getElementById("download");
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const uploadInput = document.getElementById('upload');
+const downloadBtn = document.getElementById('download');
+const zoomSlider = document.getElementById('zoom');
 
-let img = new Image();
-let frame = new Image();
-frame.src = "frames/frame.png"; // your campaign frame
+const FRAME_SRC = 'frames/frame.png';
+const frameImg = new Image();
+frameImg.src = FRAME_SRC;
 
-let photo = null;
+let userImg = null;
 let offsetX = 0, offsetY = 0;
 let scale = 1;
 let dragging = false;
-let startX, startY;
+let dragStartX, dragStartY;
 
-upload.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = (event) => {
-    img.onload = () => {
-      photo = img;
-      offsetX = 0;
-      offsetY = 0;
-      scale = 1;
-      draw();
-      download.disabled = false;
-    };
-    img.src = event.target.result;
-  };
-  reader.readAsDataURL(file);
-});
+// Touch state
+let lastTouchDistance = null;
+let isTouchDragging = false;
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (photo) {
-    const w = photo.width * scale;
-    const h = photo.height * scale;
-    const x = canvas.width / 2 - w / 2 + offsetX;
-    const y = canvas.height / 2 - h / 2 + offsetY;
-    ctx.drawImage(photo, x, y, w, h);
+  if (userImg) {
+    const iw = userImg.width;
+    const ih = userImg.height;
+
+    const sw = iw * scale;
+    const sh = ih * scale;
+
+    const dx = (canvas.width - sw) / 2 + offsetX;
+    const dy = (canvas.height - sh) / 2 + offsetY;
+
+    ctx.drawImage(userImg, dx, dy, sw, sh);
   }
 
-  // --- Border guide box (crop limit) ---
-  ctx.strokeStyle = "red";
-  ctx.lineWidth = 4;
-  ctx.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
-
-  // Frame overlay on top
-  if (frame.complete) {
-    ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+  if (frameImg.complete && frameImg.naturalWidth > 0) {
+    ctx.drawImage(frameImg, 0, 0, canvas.width, canvas.height);
   }
+
+  downloadBtn.disabled = !userImg;
+  zoomSlider.value = scale.toFixed(2);
 }
 
-// Mouse drag
-canvas.addEventListener("mousedown", (e) => {
-  dragging = true;
-  startX = e.offsetX;
-  startY = e.offsetY;
+// Upload image
+uploadInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    userImg = new Image();
+    userImg.onload = () => {
+      scale = Math.max(canvas.width / userImg.width, canvas.height / userImg.height);
+      offsetX = 0;
+      offsetY = 0;
+      draw();
+    };
+    userImg.src = reader.result;
+  };
+  reader.readAsDataURL(file);
 });
-canvas.addEventListener("mouseup", () => dragging = false);
-canvas.addEventListener("mouseout", () => dragging = false);
-canvas.addEventListener("mousemove", (e) => {
+
+// Mouse drag
+canvas.addEventListener('mousedown', (e) => {
+  if (!userImg) return;
+  dragging = true;
+  dragStartX = e.offsetX;
+  dragStartY = e.offsetY;
+});
+
+canvas.addEventListener('mousemove', (e) => {
   if (dragging) {
-    offsetX += e.offsetX - startX;
-    offsetY += e.offsetY - startY;
-    startX = e.offsetX;
-    startY = e.offsetY;
+    offsetX += e.offsetX - dragStartX;
+    offsetY += e.offsetY - dragStartY;
+    dragStartX = e.offsetX;
+    dragStartY = e.offsetY;
     draw();
   }
 });
 
-// Zoom control
-zoomInput.addEventListener("input", () => {
-  scale = parseFloat(zoomInput.value);
+canvas.addEventListener('mouseup', () => dragging = false);
+canvas.addEventListener('mouseleave', () => dragging = false);
+
+// Mouse wheel zoom
+canvas.addEventListener('wheel', (e) => {
+  if (!userImg) return;
+  e.preventDefault();
+  const zoomAmount = e.deltaY * -0.001;
+  scale = Math.min(Math.max(0.5, scale + zoomAmount), 3);
   draw();
 });
 
-// Download image
-download.addEventListener("click", () => {
-  const link = document.createElement("a");
-  link.download = "campaign-profile.png";
-  link.href = canvas.toDataURL("image/png");
+// Slider zoom
+zoomSlider.addEventListener('input', () => {
+  if (!userImg) return;
+  scale = parseFloat(zoomSlider.value);
+  draw();
+});
+
+// --- Touch events (drag + pinch) ---
+canvas.addEventListener('touchstart', (e) => {
+  if (!userImg) return;
+  if (e.touches.length === 1) {
+    // drag start
+    isTouchDragging = true;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    // pinch start
+    isTouchDragging = false;
+    lastTouchDistance = getTouchDistance(e.touches);
+  }
+});
+
+canvas.addEventListener('touchmove', (e) => {
+  if (!userImg) return;
+  e.preventDefault();
+
+  if (e.touches.length === 1 && isTouchDragging) {
+    // dragging
+    offsetX += e.touches[0].clientX - dragStartX;
+    offsetY += e.touches[0].clientY - dragStartY;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
+    draw();
+  } else if (e.touches.length === 2) {
+    // pinch zoom
+    const newDistance = getTouchDistance(e.touches);
+    if (lastTouchDistance) {
+      const delta = newDistance - lastTouchDistance;
+      scale = Math.min(Math.max(0.5, scale + delta * 0.002), 3);
+      draw();
+    }
+    lastTouchDistance = newDistance;
+  }
+}, { passive: false });
+
+canvas.addEventListener('touchend', () => {
+  isTouchDragging = false;
+  lastTouchDistance = null;
+});
+
+// Helper: distance between two touches
+function getTouchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+// Download
+downloadBtn.addEventListener('click', () => {
+  if (!userImg) return;
+  const link = document.createElement('a');
+  link.download = 'framed-profile.png';
+  link.href = canvas.toDataURL('image/png');
   link.click();
 });
 
-frame.onload = draw;
+// Redraw when frame loads
+frameImg.onload = draw;
