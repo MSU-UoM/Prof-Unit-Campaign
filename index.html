@@ -1,37 +1,21 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Profile Frame Tool</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Campaign Profile Frame</title>
+  <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <main class="container">
-    <header>
-      <h1>Profile Frame Tool</h1>
-      <p>Upload your photo, the frame is applied automatically. Then click Download.</p>
-    </header>
-
-    <section class="uploader">
-      <label class="file-label" for="upload">Choose a photo</label>
-      <input id="upload" type="file" accept="image/*" />
-      <p class="hint">Tip: use a square image for best results.</p>
-    </section>
-
-    <section class="preview">
-      <canvas id="canvas" width="1080" height="1080" aria-label="Preview canvas"></canvas>
-    </section>
-
-    <section class="actions">
-      <button id="download" disabled>Download Image</button>
-    </section>
-
-    <footer>
-      <p class="footnote">This is a simple, offline, single-frame tool you can host on GitHub Pages.</p>
-    </footer>
-  </main>
-
-  <script defer src="script.js"></script>
+  <h1>Campaign Profile Frame</h1>
+  <input type="file" id="upload" accept="image/*">
+  <div class="controls">
+    <label for="zoom">Zoom:</label>
+    <input type="range" id="zoom" min="0.5" max="3" step="0.01" value="1">
+  </div>
+  <canvas id="canvas" width="500" height="500"></canvas>
+  <br>
+  <button id="download" disabled>Download</button>
+  <script src="script.js"></script>
 </body>
 </html>
