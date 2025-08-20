@@ -1,0 +1,467 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+/**
+ * Single-file React app: Campaign Profile Frame Maker
+ *
+ * What it does
+ * - Upload a photo (JPG/PNG/WebP)
+ * - Pick a frame (built-in SVG frames) or upload a custom transparent PNG frame
+ * - Zoom and drag the photo to position it under the frame
+ * - Download a square 1080×1080 image (PNG by default)
+ *
+ * Notes
+ * - Replace the built-in frames with your campaign artwork later.
+ * - Built-in frames are simple SVGs rendered to an Image for compositing.
+ */
+
+export default function ProfileFrameMaker() {
+  // Canvas logical size (export size)
+  const CANVAS_SIZE = 1080;
+
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const [frameKind, setFrameKind] = useState<string>("classic");
+  const [customFrameDataUrl, setCustomFrameDataUrl] = useState<string | null>(null);
+  const [zoom, setZoom] = useState<number>(1);
+  const [pos, setPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
+
+  // Load images
+  const photoImg = useImage(photoDataUrl);
+  const frameImg = useImage(
+    customFrameDataUrl || svgFrameToDataUrl(frameKind, CANVAS_SIZE)
+  );
+
+  // Keep photo centered on first load
+  useEffect(() => {
+    if (photoImg && previewRef.current) {
+      // Center by default
+      setPos({ x: 0, y: 0 });
+      setZoom(1);
+    }
+  }, [photoImg?.src]);
+
+  // Draw preview on each change
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    // Clear
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Checkerboard background (for transparency awareness)
+    drawCheckerboard(ctx, canvas.width, canvas.height);
+
+    // Draw photo
+    if (photoImg) {
+      const { dx, dy, dSize } = computeImageDraw(
+        photoImg,
+        CANVAS_SIZE,
+        zoom,
+        pos.x,
+        pos.y
+      );
+      ctx.drawImage(photoImg, dx, dy, dSize, dSize);
+    }
+
+    // Draw frame on top
+    if (frameImg) {
+      ctx.drawImage(frameImg, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
+    }
+  }, [photoImg, frameImg, zoom, pos.x, pos.y]);
+
+  // Pointer handlers for drag-to-pan
+  const onPointerDown = (e: React.PointerEvent) => {
+    setIsDragging(true);
+    dragStart.current = { x: e.clientX - pos.x, y: e.clientY - pos.y };
+    (e.target as Element).setPointerCapture?.(e.pointerId);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!isDragging || !dragStart.current) return;
+    const nx = e.clientX - dragStart.current.x;
+    const ny = e.clientY - dragStart.current.y;
+    setPos({ x: nx, y: ny });
+  };
+
+  const onPointerUp = (e: React.PointerEvent) => {
+    setIsDragging(false);
+    dragStart.current = null;
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
+  };
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (!photoImg) return;
+    e.preventDefault();
+    const delta = -e.deltaY;
+    const factor = Math.exp(delta * 0.0015); // smooth zoom
+    const newZoom = clamp(zoom * factor, 0.2, 4);
+    setZoom(newZoom);
+  };
+
+  // Upload helpers
+  const onUploadPhoto = (file: File) => {
+    fileToDataUrl(file).then(setPhotoDataUrl);
+  };
+
+  const onUploadFrame = (file: File) => {
+    fileToDataUrl(file).then((url) => {
+      setCustomFrameDataUrl(url);
+      setFrameKind("custom");
+    });
+  };
+
+  const resetFrame = () => {
+    setCustomFrameDataUrl(null);
+    setFrameKind("classic");
+  };
+
+  const download = (format: "png" | "jpg" = "png") => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    const mime = format === "png" ? "image/png" : "image/jpeg";
+    const quality = format === "jpg" ? 0.95 : undefined;
+    link.download = `profile-frame.${format}`;
+    link.href = canvas.toDataURL(mime, quality as any);
+    link.click();
+  };
+
+  const hasImage = !!photoImg;
+
+  return (
+    <div className="min-h-screen w-full bg-gradient-to-b from-zinc-950 to-zinc-900 text-zinc-100">
+      <header className="sticky top-0 z-30 backdrop-blur border-b border-white/10 bg-zinc-950/60">
+        <div className="mx-auto max-w-6xl px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-white/10 grid place-items-center text-lg font-bold">CF</div>
+            <div>
+              <h1 className="text-lg font-semibold leading-tight">Campaign Profile Frame Maker</h1>
+              <p className="text-xs text-zinc-400">Upload • Frame • Download (1080×1080)</p>
+            </div>
+          </div>
+          <div className="hidden md:flex items-center gap-2 text-sm">
+            <a href="#how" className="px-3 py-1.5 rounded-xl hover:bg-white/10">How it works</a>
+            <a href="#frames" className="px-3 py-1.5 rounded-xl hover:bg-white/10">Frames</a>
+            <a href="#export" className="px-3 py-1.5 rounded-xl hover:bg-white/10">Export</a>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-6xl px-4 py-8 grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Left: Controls */}
+        <section className="order-2 lg:order-1 space-y-6">
+          {/* Uploads */}
+          <div className="p-4 md:p-6 rounded-2xl bg-white/5 border border-white/10">
+            <h2 className="text-xl font-semibold mb-2">1) Upload</h2>
+            <p className="text-sm text-zinc-400 mb-4">Upload your profile photo and (optionally) a transparent PNG frame.</p>
+            <div className="flex flex-col md:flex-row gap-3">
+              <label className="flex-1">
+                <span className="block text-sm mb-1">Profile photo</span>
+                <input
+                  className="w-full file:mr-4 file:rounded-xl file:border-0 file:bg-white/10 file:px-4 file:py-2 file:text-sm file:text-zinc-100 hover:file:bg-white/20"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onUploadPhoto(f);
+                  }}
+                />
+              </label>
+              <label className="flex-1">
+                <span className="block text-sm mb-1">Custom frame (PNG)</span>
+                <input
+                  className="w-full file:mr-4 file:rounded-xl file:border-0 file:bg-white/10 file:px-4 file:py-2 file:text-sm file:text-zinc-100 hover:file:bg-white/20"
+                  type="file"
+                  accept="image/png"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onUploadFrame(f);
+                  }}
+                />
+              </label>
+            </div>
+            {customFrameDataUrl && (
+              <div className="mt-3 flex items-center gap-3 text-sm">
+                <img src={customFrameDataUrl} alt="Custom frame" className="h-10 w-10 rounded-lg object-contain bg-white/10"/>
+                <button onClick={resetFrame} className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20">Remove custom frame</button>
+              </div>
+            )}
+          </div>
+
+          {/* Built-in frames */}
+          <div id="frames" className="p-4 md:p-6 rounded-2xl bg-white/5 border border-white/10">
+            <h2 className="text-xl font-semibold mb-2">2) Choose a frame</h2>
+            <p className="text-sm text-zinc-400 mb-4">Pick a starter style. Replace later with your official artwork.</p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {FRAME_KINDS.map((k) => (
+                <button
+                  key={k.id}
+                  onClick={() => {
+                    setFrameKind(k.id);
+                    if (k.id !== "custom") setCustomFrameDataUrl(null);
+                  }}
+                  className={`group rounded-2xl p-2 border ${
+                    frameKind === k.id ? "border-white" : "border-white/10"
+                  } bg-white/5 hover:bg-white/10`}
+                  title={k.label}
+                >
+                  <div className="aspect-square w-full rounded-xl overflow-hidden">
+                    <img
+                      src={svgFrameToDataUrl(k.id, 512)}
+                      alt={k.label}
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                  <div className="mt-2 text-xs text-center text-zinc-300">{k.label}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Positioning */}
+          <div className="p-4 md:p-6 rounded-2xl bg-white/5 border border-white/10">
+            <h2 className="text-xl font-semibold mb-2">3) Position photo</h2>
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={0.2}
+                max={4}
+                step={0.01}
+                value={zoom}
+                onChange={(e) => setZoom(parseFloat(e.target.value))}
+                className="w-full"
+              />
+              <span className="text-sm w-16 text-right tabular-nums">{zoom.toFixed(2)}×</span>
+            </div>
+            <p className="text-xs text-zinc-400 mt-2">Tip: drag the image in the preview, or use your mouse wheel / trackpad to zoom.</p>
+          </div>
+
+          {/* Export */}
+          <div id="export" className="p-4 md:p-6 rounded-2xl bg-white/5 border border-white/10">
+            <h2 className="text-xl font-semibold mb-3">4) Export</h2>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => download("png")}
+                className="px-4 py-2 rounded-2xl bg-white text-zinc-900 font-semibold hover:opacity-90"
+                disabled={!hasImage}
+              >
+                Download PNG
+              </button>
+              <button
+                onClick={() => download("jpg")}
+                className="px-4 py-2 rounded-2xl bg-white/90 text-zinc-900 font-semibold hover:opacity-90"
+                disabled={!hasImage}
+              >
+                Download JPG
+              </button>
+              {!hasImage && (
+                <span className="text-xs text-zinc-400">Upload a photo to enable download</span>
+              )}
+            </div>
+          </div>
+
+          <div id="how" className="text-sm text-zinc-400 px-1">
+            <ol className="list-decimal list-inside space-y-1 mt-2">
+              <li>Upload your profile photo.</li>
+              <li>Pick a built-in frame or upload your transparent PNG frame.</li>
+              <li>Use the slider (or mouse wheel) to zoom and drag to position.</li>
+              <li>Click Download to save a 1080×1080 image for social media.</li>
+            </ol>
+          </div>
+        </section>
+
+        {/* Right: Preview */}
+        <section className="order-1 lg:order-2">
+          <div
+            ref={previewRef}
+            className="rounded-3xl border border-white/10 bg-white/5 p-4 md:p-6 sticky top-20"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-xl font-semibold">Live preview</h2>
+              <span className="text-sm text-zinc-400">1080×1080 export</span>
+            </div>
+
+            <div
+              className="relative aspect-square w-full rounded-2xl overflow-hidden select-none"
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerUp}
+              onWheel={onWheel}
+            >
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_SIZE}
+                height={CANVAS_SIZE}
+                className="h-full w-full"
+              />
+              {!photoImg && (
+                <div className="absolute inset-0 grid place-items-center text-center text-zinc-300 p-6">
+                  <div>
+                    <div className="text-6xl mb-2">📷</div>
+                    <p className="font-medium">Upload a photo to start</p>
+                    <p className="text-sm text-zinc-400">Use the file input on the left, then pick a frame.</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer className="mx-auto max-w-6xl px-4 py-10 text-sm text-zinc-400">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div>
+            Built with <span className="text-zinc-200">React</span> & <span className="text-zinc-200">Canvas</span> · Replace demo frames with your own artwork.
+          </div>
+          <div className="opacity-80">© {new Date().getFullYear()} Your Campaign</div>
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+/** Helpers **/
+
+function drawCheckerboard(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  const s = 32;
+  ctx.save();
+  for (let y = 0; y < h; y += s) {
+    for (let x = 0; x < w; x += s) {
+      ctx.fillStyle = ((x / s + y / s) % 2 === 0) ? "#1a1a1a" : "#111111";
+      ctx.fillRect(x, y, s, s);
+    }
+  }
+  ctx.restore();
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, v));
+}
+
+function computeImageDraw(
+  img: HTMLImageElement,
+  canvasSize: number,
+  zoom: number,
+  offsetX: number,
+  offsetY: number
+) {
+  // Fit image to cover square, then apply zoom and offsets
+  const iw = img.naturalWidth;
+  const ih = img.naturalHeight;
+  const baseScale = Math.max(canvasSize / iw, canvasSize / ih);
+  const scale = baseScale * zoom;
+  const dSize = Math.max(iw, ih) * scale; // draw as square side = larger dimension scaled
+  // Center
+  const cx = canvasSize / 2;
+  const cy = canvasSize / 2;
+  const dx = cx - dSize / 2 + offsetX;
+  const dy = cy - dSize / 2 + offsetY;
+  return { dx, dy, dSize };
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function useImage(src: string | null) {
+  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  useEffect(() => {
+    if (!src) {
+      setImg(null);
+      return;
+    }
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => setImg(image);
+    image.src = src;
+  }, [src]);
+  return img;
+}
+
+/** Frame generation **/
+
+const FRAME_KINDS = [
+  { id: "classic", label: "Classic" },
+  { id: "bold", label: "Bold Ring" },
+  { id: "ribbon", label: "Ribbon Bottom" },
+  { id: "flag", label: "Flag Sweep" },
+  { id: "custom", label: "Custom (PNG)" },
+];
+
+function svgFrameToDataUrl(kind: string, size: number) {
+  const padding = 28; // visual padding for strokes/text
+  const s = size;
+  const text = "VOTE FOR CHANGE"; // Replace with your campaign text
+  const handle = "@YourCampaign";
+
+  let svg = "";
+
+  if (kind === "bold") {
+    svg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'>
+      <defs>
+        <linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>
+          <stop offset='0%' stop-color='#10b981'/>
+          <stop offset='100%' stop-color='#3b82f6'/>
+        </linearGradient>
+      </defs>
+      <rect width='100%' height='100%' fill='none'/>
+      <circle cx='${s/2}' cy='${s/2}' r='${s/2 - padding}' fill='none' stroke='url(#g)' stroke-width='40'/>
+      <text x='50%' y='${s - 50}' fill='#ffffff' font-family='Inter, system-ui, -apple-system, Segoe UI, Roboto' font-size='48' text-anchor='middle' font-weight='700' letter-spacing='2'>${text}</text>
+    </svg>`;
+  } else if (kind === "ribbon") {
+    svg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'>
+      <rect width='100%' height='100%' fill='none'/>
+      <rect x='0' y='${s - 220}' width='${s}' height='220' rx='48' fill='rgba(0,0,0,0.55)'/>
+      <text x='50%' y='${s - 120}' fill='#ffffff' font-family='Inter, system-ui, -apple-system, Segoe UI, Roboto' font-size='60' text-anchor='middle' font-weight='800' letter-spacing='2'>${text}</text>
+      <text x='50%' y='${s - 60}' fill='#a3a3a3' font-family='Inter, system-ui, -apple-system, Segoe UI, Roboto' font-size='38' text-anchor='middle' font-weight='600'>${handle}</text>
+      <rect x='40' y='40' width='${s-80}' height='${s-80}' rx='64' fill='none' stroke='rgba(255,255,255,0.9)' stroke-width='12'/>
+    </svg>`;
+  } else if (kind === "flag") {
+    svg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'>
+      <defs>
+        <linearGradient id='flag' x1='0' y1='0' x2='1' y2='0'>
+          <stop offset='0%' stop-color='#ef4444'/>
+          <stop offset='33%' stop-color='#f59e0b'/>
+          <stop offset='66%' stop-color='#22c55e'/>
+          <stop offset='100%' stop-color='#3b82f6'/>
+        </linearGradient>
+      </defs>
+      <rect width='100%' height='100%' fill='none'/>
+      <path d='M 0 ${s*0.75} C ${s*0.25} ${s*0.65}, ${s*0.55} ${s*0.85}, ${s} ${s*0.7} L ${s} ${s} L 0 ${s}' fill='url(#flag)' opacity='0.95'/>
+      <text x='50%' y='${s - 60}' fill='#0a0a0a' font-family='Inter, system-ui, -apple-system, Segoe UI, Roboto' font-size='56' text-anchor='middle' font-weight='900'>${text}</text>
+    </svg>`;
+  } else if (kind === "classic") {
+    svg = `
+    <svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'>
+      <rect width='100%' height='100%' fill='none'/>
+      <rect x='${padding}' y='${padding}' width='${s - padding*2}' height='${s - padding*2}' rx='72' fill='none' stroke='rgba(255,255,255,0.9)' stroke-width='18'/>
+      <rect x='${padding + 18}' y='${padding + 18}' width='${s - (padding+18)*2}' height='${s - (padding+18)*2}' rx='64' fill='none' stroke='rgba(255,255,255,0.6)' stroke-width='8'/>
+      <text x='50%' y='${padding + 90}' fill='#ffffff' font-family='Inter, system-ui, -apple-system, Segoe UI, Roboto' font-size='54' text-anchor='middle' font-weight='800'>${text}</text>
+    </svg>`;
+  } else if (kind === "custom") {
+    // Will be replaced by uploaded PNG; fallback to transparent
+    svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'></svg>`;
+  } else {
+    // default
+    svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${s}' height='${s}' viewBox='0 0 ${s} ${s}'></svg>`;
+  }
+
+  const encoded = encodeURIComponent(svg).replace(/'/g, "%27").replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return `data:image/svg+xml;charset=utf-8,${encoded}`;
+}
